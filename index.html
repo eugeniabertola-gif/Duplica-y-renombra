@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PDF Renamer — Duplicá y renombrá PDFs desde un Excel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,500;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+<style>
+  :root {
+    --bg: #0c0c0f;
+    --surface: #16161a;
+    --surface-hover: #1e1e24;
+    --border: #2a2a32;
+    --border-active: #4a4a58;
+    --text: #e8e6e3;
+    --text-muted: #8b8a8d;
+    --accent: #f05545;
+    --accent-glow: rgba(240, 85, 69, 0.15);
+    --accent-soft: #ff7b6b;
+    --success: #34d399;
+    --success-glow: rgba(52, 211, 153, 0.12);
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'DM Sans', system-ui, sans-serif;
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Grain overlay ── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  .app {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 48px 24px 80px;
+  }
+
+  /* ── Header ── */
+  header {
+    margin-bottom: 48px;
+  }
+  header .tag {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--accent-glow);
+    padding: 4px 10px;
+    border-radius: 4px;
+    margin-bottom: 16px;
+  }
+  header h1 {
+    font-size: clamp(28px, 5vw, 38px);
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.025em;
+    margin-bottom: 12px;
+  }
+  header h1 span { color: var(--accent); }
+  header p {
+    color: var(--text-muted);
+    font-size: 15px;
+    max-width: 480px;
+  }
+
+  /* ── Steps ── */
+  .step {
+    position: relative;
+    padding: 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 16px;
+    transition: border-color 0.3s, opacity 0.3s;
+  }
+  .step.disabled { opacity: 0.4; pointer-events: none; }
+  .step.active { border-color: var(--border-active); }
+  .step.done { border-color: var(--success); background: linear-gradient(135deg, var(--surface), rgba(52,211,153,0.03)); }
+
+  .step-number {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .step-number .check {
+    display: none;
+    width: 18px; height: 18px;
+    background: var(--success);
+    border-radius: 50%;
+    color: var(--bg);
+    font-size: 11px;
+    line-height: 18px;
+    text-align: center;
+  }
+  .step.done .step-number .check { display: inline-flex; align-items: center; justify-content: center; }
+
+  .step h2 {
+    font-size: 17px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .step .hint {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+  }
+
+  /* ── Drop zones ── */
+  .dropzone {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius-sm);
+    padding: 32px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+  .dropzone:hover, .dropzone.dragover {
+    border-color: var(--accent);
+    background: var(--accent-glow);
+  }
+  .dropzone input[type="file"] {
+    position: absolute; inset: 0; opacity: 0; cursor: pointer;
+  }
+  .dropzone .icon {
+    font-size: 28px;
+    margin-bottom: 8px;
+  }
+  .dropzone .label {
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .dropzone .sublabel {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+  .file-badge {
+    display: none;
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--success-glow);
+    color: var(--success);
+    padding: 6px 12px;
+    border-radius: 6px;
+    margin-top: 12px;
+    word-break: break-all;
+  }
+  .step.done .file-badge { display: inline-block; }
+
+  /* ── Select / Inputs ── */
+  select, input[type="text"] {
+    width: 100%;
+    padding: 10px 14px;
+    font-family: var(--sans);
+    font-size: 14px;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    outline: none;
+    transition: border-color 0.2s;
+    appearance: none;
+  }
+  select:focus, input[type="text"]:focus {
+    border-color: var(--accent);
+  }
+  select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%238b8a8d' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 14px center;
+    padding-right: 36px;
+  }
+  label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+  .input-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 12px;
+  }
+
+  /* ── Button ── */
+  .btn-generate {
+    width: 100%;
+    padding: 14px 24px;
+    font-family: var(--sans);
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--accent);
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.2s, opacity 0.2s;
+    margin-top: 8px;
+  }
+  .btn-generate:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 24px rgba(240,85,69,0.25);
+  }
+  .btn-generate:active:not(:disabled) { transform: translateY(0); }
+  .btn-generate:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* ── Progress ── */
+  .progress-wrap {
+    display: none;
+    margin-top: 16px;
+  }
+  .progress-wrap.visible { display: block; }
+  .progress-bar-bg {
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-soft));
+    border-radius: 3px;
+    transition: width 0.15s ease;
+  }
+  .progress-text {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 8px;
+    text-align: right;
+  }
+
+  /* ── Result ── */
+  .result {
+    display: none;
+    text-align: center;
+    padding: 32px 24px;
+    background: linear-gradient(135deg, var(--surface), rgba(52,211,153,0.04));
+    border: 1px solid var(--success);
+    border-radius: var(--radius);
+    margin-top: 16px;
+  }
+  .result.visible { display: block; animation: fadeUp 0.4s ease; }
+  .result .big-check {
+    width: 48px; height: 48px;
+    background: var(--success);
+    color: var(--bg);
+    border-radius: 50%;
+    font-size: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 12px;
+  }
+  .result h3 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+  .result p { font-size: 13px; color: var(--text-muted); }
+
+  /* ── Log ── */
+  .log-toggle {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-muted);
+    background: none;
+    border: none;
+    cursor: pointer;
+    margin-top: 16px;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .log-panel {
+    display: none;
+    margin-top: 12px;
+    max-height: 200px;
+    overflow-y: auto;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.7;
+    color: var(--text-muted);
+  }
+  .log-panel.open { display: block; }
+
+  /* ── Footer ── */
+  footer {
+    text-align: center;
+    margin-top: 48px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  footer a { color: var(--accent-soft); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Header -->
+  <header>
+    <div class="tag">Herramienta offline — 100% en tu navegador</div>
+    <h1>PDF <span>Renamer</span></h1>
+    <p>Subí un PDF y un Excel. Se duplica el PDF por cada fila y se renombra según la columna que elijas. Descargás un ZIP listo.</p>
+  </header>
+
+  <!-- Step 1: PDF -->
+  <div class="step active" id="step1">
+    <div class="step-number"><span class="check">✓</span> Paso 1</div>
+    <h2>PDF base</h2>
+    <p class="hint">El archivo que se va a duplicar y renombrar.</p>
+    <div class="dropzone" id="dropPdf">
+      <div class="icon">📄</div>
+      <div class="label">Arrastrá o hacé clic para subir un .pdf</div>
+      <div class="sublabel">Solo se procesa en tu navegador, nada se sube a internet.</div>
+      <input type="file" accept=".pdf" id="inputPdf">
+    </div>
+    <div class="file-badge" id="badgePdf"></div>
+  </div>
+
+  <!-- Step 2: Excel -->
+  <div class="step disabled" id="step2">
+    <div class="step-number"><span class="check">✓</span> Paso 2</div>
+    <h2>Excel / CSV</h2>
+    <p class="hint">El listado con los nombres para renombrar.</p>
+    <div class="dropzone" id="dropXl">
+      <div class="icon">📊</div>
+      <div class="label">Arrastrá o hacé clic para subir .xlsx, .xls o .csv</div>
+      <div class="sublabel">Se lee la primera hoja si es un Excel.</div>
+      <input type="file" accept=".xlsx,.xls,.csv,.tsv" id="inputXl">
+    </div>
+    <div class="file-badge" id="badgeXl"></div>
+  </div>
+
+  <!-- Step 3: Config -->
+  <div class="step disabled" id="step3">
+    <div class="step-number"><span class="check">✓</span> Paso 3</div>
+    <h2>Configuración</h2>
+    <p class="hint">Elegí la columna y opciones de nombre.</p>
+
+    <label for="colSelect">Columna para renombrar</label>
+    <select id="colSelect"><option value="">— cargá un Excel primero —</option></select>
+
+    <div id="previewWrap" style="margin-top:12px; display:none;">
+      <label>Vista previa (primeros 3 valores)</label>
+      <div id="previewValues" style="font-family:var(--mono);font-size:12px;color:var(--text-muted);line-height:1.8;"></div>
+    </div>
+
+    <div class="input-row">
+      <div>
+        <label for="prefixInput">Prefijo (opcional)</label>
+        <input type="text" id="prefixInput" placeholder="ej: CERT_">
+      </div>
+      <div>
+        <label for="suffixInput">Sufijo (opcional)</label>
+        <input type="text" id="suffixInput" placeholder="ej: _2025">
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 4: Generate -->
+  <div class="step disabled" id="step4">
+    <div class="step-number"><span class="check">✓</span> Paso 4</div>
+    <h2>Generar y descargar</h2>
+    <p class="hint">Se genera un ZIP con todos los PDFs renombrados.</p>
+    <button class="btn-generate" id="btnGenerate" disabled>Generar ZIP</button>
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-bar-bg"><div class="progress-bar-fill" id="progressFill"></div></div>
+      <div class="progress-text" id="progressText">0 / 0</div>
+    </div>
+  </div>
+
+  <!-- Result -->
+  <div class="result" id="resultBox">
+    <div class="big-check">✓</div>
+    <h3 id="resultTitle">¡Listo!</h3>
+    <p id="resultSub">Tu ZIP se descargó correctamente.</p>
+    <button class="log-toggle" id="logToggle">ver log de archivos</button>
+    <div class="log-panel" id="logPanel"></div>
+  </div>
+
+  <footer>
+    Hecho con ❤️ — <a href="https://github.com" target="_blank">Código en GitHub</a>
+  </footer>
+</div>
+
+<script>
+// ========= State =========
+let pdfBytes = null;
+let pdfName = '';
+let xlData = [];   // array of arrays
+let xlCols = [];   // header strings
+
+// ========= DOM refs =========
+const $step1 = document.getElementById('step1');
+const $step2 = document.getElementById('step2');
+const $step3 = document.getElementById('step3');
+const $step4 = document.getElementById('step4');
+const $inputPdf = document.getElementById('inputPdf');
+const $inputXl = document.getElementById('inputXl');
+const $dropPdf = document.getElementById('dropPdf');
+const $dropXl = document.getElementById('dropXl');
+const $badgePdf = document.getElementById('badgePdf');
+const $badgeXl = document.getElementById('badgeXl');
+const $colSelect = document.getElementById('colSelect');
+const $prefix = document.getElementById('prefixInput');
+const $suffix = document.getElementById('suffixInput');
+const $btn = document.getElementById('btnGenerate');
+const $progressWrap = document.getElementById('progressWrap');
+const $progressFill = document.getElementById('progressFill');
+const $progressText = document.getElementById('progressText');
+const $result = document.getElementById('resultBox');
+const $resultTitle = document.getElementById('resultTitle');
+const $resultSub = document.getElementById('resultSub');
+const $logToggle = document.getElementById('logToggle');
+const $logPanel = document.getElementById('logPanel');
+const $previewWrap = document.getElementById('previewWrap');
+const $previewValues = document.getElementById('previewValues');
+
+// ========= Helpers =========
+function sanitize(name) {
+  if (!name) return '';
+  name = String(name).trim()
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+  const reserved = new Set([
+    'CON','PRN','AUX','NUL',
+    'COM1','COM2','COM3','COM4','COM5','COM6','COM7','COM8','COM9',
+    'LPT1','LPT2','LPT3','LPT4','LPT5','LPT6','LPT7','LPT8','LPT9'
+  ]);
+  let base = name.replace(/[\s.]+$/,'');
+  if (reserved.has(base.toUpperCase())) base = '_' + base + '_';
+  base = base.replace(/\s{2,}/g,' ').replace(/[_-]{2,}/g,'_').trim();
+  return base.slice(0, 180);
+}
+
+function ensureUnique(name, used) {
+  if (!used.has(name)) { used.add(name); return name; }
+  const dot = name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
+  let i = 1;
+  while (true) {
+    const cand = `${stem} (${i})${ext}`;
+    if (!used.has(cand)) { used.add(cand); return cand; }
+    i++;
+  }
+}
+
+function activateStep(el) {
+  el.classList.remove('disabled');
+  el.classList.add('active');
+}
+function completeStep(el) {
+  el.classList.remove('active');
+  el.classList.add('done');
+}
+
+// ========= Drag & drop helpers =========
+function setupDrop(zone, input) {
+  ['dragenter','dragover'].forEach(evt =>
+    zone.addEventListener(evt, e => { e.preventDefault(); zone.classList.add('dragover'); })
+  );
+  ['dragleave','drop'].forEach(evt =>
+    zone.addEventListener(evt, () => zone.classList.remove('dragover'))
+  );
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    if (e.dataTransfer.files.length) {
+      input.files = e.dataTransfer.files;
+      input.dispatchEvent(new Event('change'));
+    }
+  });
+}
+setupDrop($dropPdf, $inputPdf);
+setupDrop($dropXl, $inputXl);
+
+// ========= Step 1: PDF =========
+$inputPdf.addEventListener('change', async () => {
+  const file = $inputPdf.files[0];
+  if (!file) return;
+  pdfBytes = await file.arrayBuffer();
+  pdfName = file.name;
+  $badgePdf.textContent = pdfName;
+  completeStep($step1);
+  activateStep($step2);
+});
+
+// ========= Step 2: Excel =========
+$inputXl.addEventListener('change', async () => {
+  const file = $inputXl.files[0];
+  if (!file) return;
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array', raw: false });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const json = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  if (!json.length) { alert('El archivo está vacío.'); return; }
+
+  xlCols = json[0].map(String);
+  xlData = json.slice(1);
+
+  $badgeXl.textContent = `${file.name} — ${xlData.length} filas, ${xlCols.length} columnas`;
+  completeStep($step2);
+  activateStep($step3);
+  activateStep($step4);
+
+  // Populate column select
+  $colSelect.innerHTML = '';
+  xlCols.forEach((c, i) => {
+    const o = document.createElement('option');
+    o.value = i;
+    o.textContent = c || `(Columna ${i + 1})`;
+    $colSelect.appendChild(o);
+  });
+  updatePreview();
+  $btn.disabled = false;
+});
+
+$colSelect.addEventListener('change', updatePreview);
+
+function updatePreview() {
+  const idx = parseInt($colSelect.value, 10);
+  if (isNaN(idx) || !xlData.length) { $previewWrap.style.display = 'none'; return; }
+  const vals = xlData.slice(0, 3).map(r => String(r[idx] ?? '').trim()).filter(Boolean);
+  if (!vals.length) { $previewWrap.style.display = 'none'; return; }
+  $previewValues.innerHTML = vals.map(v => `→ <strong>${v}</strong>.pdf`).join('<br>');
+  $previewWrap.style.display = 'block';
+}
+
+// ========= Step 4: Generate =========
+$btn.addEventListener('click', async () => {
+  if (!pdfBytes || !xlData.length) return;
+  $btn.disabled = true;
+  $progressWrap.classList.add('visible');
+  $result.classList.remove('visible');
+
+  const colIdx = parseInt($colSelect.value, 10);
+  const prefix = $prefix.value.trim();
+  const suffix = $suffix.value.trim();
+
+  const zip = new JSZip();
+  const used = new Set();
+  const log = [];
+  let count = 0;
+
+  const rows = xlData.filter(r => String(r[colIdx] ?? '').trim() !== '');
+  const total = rows.length;
+
+  for (const row of rows) {
+    const raw = String(row[colIdx] ?? '').trim();
+    let clean = sanitize(raw);
+    if (!clean) clean = 'sin_nombre_' + Date.now();
+    let fname = sanitize(`${prefix}${clean}${suffix}`) + '.pdf';
+    fname = ensureUnique(fname, used);
+    zip.file(fname, pdfBytes);
+    log.push(fname);
+    count++;
+    const pct = Math.round((count / total) * 100);
+    $progressFill.style.width = pct + '%';
+    $progressText.textContent = `${count} / ${total}`;
+    // yield to UI
+    if (count % 50 === 0) await new Promise(r => setTimeout(r, 0));
+  }
+
+  const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+  saveAs(blob, 'pdfs_renombrados.zip');
+
+  completeStep($step4);
+  $resultTitle.textContent = `¡${count} PDFs generados!`;
+  $resultSub.textContent = `El ZIP "pdfs_renombrados.zip" se descargó automáticamente.`;
+  $result.classList.add('visible');
+
+  $logPanel.innerHTML = log.map(f => `<div>${f}</div>`).join('');
+  $logToggle.onclick = () => $logPanel.classList.toggle('open');
+
+  $btn.disabled = false;
+});
+</script>
+</body>
+</html>
